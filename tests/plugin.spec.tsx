@@ -112,4 +112,21 @@ describe('browser plugin', () => {
     expect(view.container.querySelector('.md-code-block')).toBeNull()
     plugin.dispose()
   })
+
+  it('follows the DSH shell dark theme and reacts to live switches', async () => {
+    const plugin = mountPlugin()
+    document.body.setAttribute('data-ds-dark-theme', '')
+    const view = render(
+      <MarkstreamMarkdown text={'```python\nprint(1)\n```'} streaming={false} />,
+    )
+    await waitFor(() => {
+      expect(view.container.querySelector('.markstream-react.dark')).not.toBeNull()
+    })
+    document.body.removeAttribute('data-ds-dark-theme')
+    await waitFor(() => {
+      expect(view.container.querySelector('.markstream-react.dark')).toBeNull()
+    })
+    view.unmount()
+    plugin.dispose()
+  })
 })

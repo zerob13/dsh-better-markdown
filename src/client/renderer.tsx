@@ -92,12 +92,66 @@ export function DshCodeBlockNode({ node, ctx }: NodeComponentProps<CodeBlockNode
   )
 }
 
+/** Luminance threshold (0-255 scale) below which the DSW base background counts as dark. */
+const DARK_BG_LUMINANCE = 140
+
+/**
+ * Resolve whether the DSH web shell is currently in dark mode.
+ * Primary signal: luminance of the computed `--dsw-alias-bg-base` token — always fresh,
+ * independent of how the theme system applies tokens. Fallbacks are the
+ * `data-ds-dark-theme` attribute on `<body>`, then the OS preference.
+ */
+function detectDshDark(): boolean {
+  try {
+    const value = getComputedStyle(document.body).getPropertyValue('--dsw-alias-bg-base').trim()
+    if (value !== '') {
+      const match = /(?:rgba?\(\s*)?(\d+)[,\s]+(\d+)[,\s]+(\d+)/.exec(value)
+      if (match !== null) {
+        return 0.2126 * Number(match[1]) + 0.7152 * Number(match[2]) + 0.0722 * Number(match[3]) < DARK_BG_LUMINANCE
+      }
+    }
+  } catch { /* document body not available yet */ }
+  try {
+    if (document.body.hasAttribute('data-ds-dark-theme')) return true
+  } catch { /* ignore */ }
+  try {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches
+  } catch {
+    return false
+  }
+}
+
+/** Reactive DSH dark-mode state; re-renders when the shell flips theme tokens or attributes. */
+export function useDshIsDark(): boolean {
+  const [dark, setDark] = useState(detectDshDark)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const schedule = () => {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = setTimeout(() => setDark(detectDshDark()), 80)
+    }
+    try {
+      const observer = new MutationObserver(schedule)
+      const options: MutationObserverInit = { attributes: true, attributeFilter: ['data-ds-dark-theme', 'style'] }
+      observer.observe(document.documentElement, options)
+      observer.observe(document.body, options)
+      return () => {
+        if (timer !== undefined) clearTimeout(timer)
+        observer.disconnect()
+      }
+    } catch { /* MutationObserver unavailable */ }
+    return undefined
+  }, [])
+  return dark
+}
+
 /** Markstream wrapper configured for untrusted assistant output. */
 export const MarkstreamMarkdown = memo(function MarkstreamMarkdown({ text, streaming, fileMentions }: {
   text: string
   streaming: boolean
   fileMentions?: MarkdownFileMentions | undefined
 }) {
+  const isDark = useDshIsDark()
   const codeBlockProps = useMemo(() => ({
     fileMentions: streaming ? undefined : fileMentions,
   }), [fileMentions, streaming])
@@ -106,6 +160,7 @@ export const MarkstreamMarkdown = memo(function MarkstreamMarkdown({ text, strea
       <MarkdownRender
         content={text}
         final={!streaming}
+        isDark={isDark}
         customId={CUSTOM_COMPONENT_SCOPE}
         htmlPolicy="escape"
         fade={false}
