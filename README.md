@@ -23,7 +23,7 @@
   <a href="https://github.com/zerob13/dsh-better-markdown/blob/master/README.md"><b>中文</b></a> · <a href="https://github.com/zerob13/dsh-better-markdown/blob/master/README_EN.md">English</a>
 </p>
 
-`dsh-better-markdown` 是一个 DeepSeek Harness Web 客户端插件。安装后，Web 对话中所有带流式状态的 assistant Markdown 都由 `markstream-react` 解析和渲染；同一消息流结束后继续使用同一个 renderer，不会在完成瞬间切回另一套 Markdown 实现。
+`dsh-better-markdown` 是一个 DeepSeek Harness Web 客户端插件。安装后，Web 对话中所有带流式状态的 assistant Markdown 都由 `markstream-react` 解析和渲染；同一消息流结束后继续使用同一个 renderer，不会在完成瞬间切回另一套 Markdown 实现。右侧用户消息（`user`）与运行中插话（`steering`）的文本块也由同一个 `markstream-react` 渲染，图片、附加内容块与复制操作保持 Harness 原行为。
 
 > `markstream-react` 是 [`Simon-He95/markstream-vue`](https://github.com/Simon-He95/markstream-vue) monorepo 提供的 React 版本。本插件在 Harness 中使用的是 React package，不会引入 Vue runtime。
 
@@ -56,6 +56,7 @@
 |---|---|
 | Assistant streaming Markdown | 全部交给 `markstream-react` |
 | Settled assistant Markdown | 继续使用同一个 Markstream renderer |
+| 用户消息 / steering Markdown | 右侧用户气泡文本块交给 `markstream-react`；图片、附加内容块与复制操作保持 Harness 原行为 |
 | Mermaid | 插件内置 `mermaid@11.16.1`，无需额外安装 |
 | Math | KaTeX inline / display math |
 | Code fences | 使用 Markstream `MarkdownCodeBlockNode` + `stream-markdown` + Shiki；未知语言回退为可见纯文本 |
@@ -74,6 +75,13 @@ Assistant token stream
        |- priority -100: BetterAssistantNodeView
        |                  -> markstream-react  (active)
        |                       `- fenced code -> stream-markdown -> Shiki
+       `- priority    0: Harness built-in      (fallback)
+
+User / steering message
+  -> Harness session projection
+  -> conversation.chat.node / user | steering
+       |- priority -100: BetterUserNodeView
+       |                  -> markstream-react  (active)
        `- priority    0: Harness built-in      (fallback)
 ```
 
@@ -181,8 +189,9 @@ pnpm pack --dry-run
 
 主要文件：
 
-- `src/client/index.ts`：注册 Markstream component policy 和 assistant slot shadow
+- `src/client/index.ts`：注册 Markstream component policy 和 assistant / user / steering slot shadow
 - `src/client/renderer.tsx`：assistant node 与 Markdown renderer
+- `src/client/user.tsx`：user / steering 气泡与 Markdown renderer
 - `src/client/shiki.ts`：单文件插件使用的 fine-grained Shiki bundle
 - `src/client/styles.css`：Harness token 适配
 - `cordis.patch.yml`：插件 bundle row

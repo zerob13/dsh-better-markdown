@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { removeCustomComponents } from 'markstream-react'
 import { apply } from '../src/client/index.ts'
 import { MarkstreamMarkdown } from '../src/client/renderer.tsx'
+import { UserMarkdownBubble } from '../src/client/user.tsx'
 
 function mountPlugin() {
   const register = vi.fn(() => () => {})
@@ -40,6 +41,18 @@ describe('browser plugin', () => {
     plugin.dispose()
   })
 
+  it('shadows the built-in user and steering renderers', () => {
+    const plugin = mountPlugin()
+    for (const key of ['user', 'steering']) {
+      expect(plugin.register).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'conversation.chat.node',
+        key,
+        priority: -100,
+      }), expect.objectContaining({ type: expect.any(Function) }))
+    }
+    plugin.dispose()
+  })
+
   it('renders streamed Markdown through markstream-react', () => {
     const plugin = mountPlugin()
     const view = render(<MarkstreamMarkdown text={'# Stream\n\n**partial'} streaming />)
@@ -47,6 +60,23 @@ describe('browser plugin', () => {
     expect(screen.getByRole('heading', { name: 'Stream' })).toBeTruthy()
     view.rerender(<MarkstreamMarkdown text={'# Stream\n\n**complete**'} streaming={false} />)
     expect(screen.getByText('complete').closest('strong')).not.toBeNull()
+    plugin.dispose()
+  })
+
+  it('renders user message text through markstream-react', () => {
+    const plugin = mountPlugin()
+    const t = ((key: string) => key) as never
+    const view = render(
+      <UserMarkdownBubble
+        content={[{ type: 'text', text: '# Hello\n\n**bold**' }] as never}
+        time={Date.now()}
+        loadImage={undefined}
+        t={t}
+      />,
+    )
+    expect(view.container.querySelector('[data-markdown-renderer="markstream-react"] .markstream-react')).not.toBeNull()
+    expect(screen.getByRole('heading', { name: 'Hello' })).toBeTruthy()
+    expect(screen.getByText('bold').closest('strong')).not.toBeNull()
     plugin.dispose()
   })
 

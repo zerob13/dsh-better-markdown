@@ -1,4 +1,4 @@
-/** Browser half: shadow the built-in assistant renderer at a lower slot priority. */
+/** Browser half: shadow the built-in assistant and user renderers at a lower slot priority. */
 
 import type { Context } from '@deepseek-ai/cordis'
 import { removeCustomComponents, setCustomComponents } from 'markstream-react'
@@ -11,6 +11,7 @@ import {
   DshInlineCodeNode,
   DshLinkNode,
 } from './renderer.tsx'
+import { BetterUserNodeView } from './user.tsx'
 
 const CUSTOM_COMPONENT_SCOPE = 'dsh-better-markdown'
 
@@ -18,7 +19,8 @@ const CUSTOM_COMPONENT_SCOPE = 'dsh-better-markdown'
 export const inject = ['slots']
 
 /**
- * Replace the `assistant-step` slot cell while preserving the built-in renderer as a fallback.
+ * Replace the `assistant-step`, `user`, and `steering` slot cells while
+ * preserving the built-in renderers as fallbacks.
  * @param ctx - Browser plugin context.
  */
 export function apply(ctx: Context): void {
@@ -38,4 +40,18 @@ export function apply(ctx: Context): void {
     priority: -100,
     locale: 'conversation',
   }, BetterAssistantNodeView))
+
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+    name: 'conversation.chat.node',
+    key: 'user',
+    priority: -100,
+    locale: 'conversation',
+  }, BetterUserNodeView))
+
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+    name: 'conversation.chat.node',
+    key: 'steering',
+    priority: -100,
+    locale: 'conversation',
+  }, BetterUserNodeView))
 }

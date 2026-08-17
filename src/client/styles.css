@@ -148,3 +148,125 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* User bubble: same right-aligned column geometry as the built-in
+   MessageItem user row (Figma User_Bubble/message_container). */
+.dsh-better-markdown__user-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.dsh-better-markdown__user-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(525px, 82%);
+}
+
+.dsh-better-markdown__user-bubble {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  border-radius: 22px;
+  padding: 10px 16px;
+  background: var(--dsw-specific-bubble);
+  color: var(--dsw-alias-label-primary);
+  font-size: 16px;
+  line-height: 24px;
+}
+
+/* Code-block user messages should span the same max bubble width as long
+   plain-text messages instead of shrinking to the code block's intrinsic
+   width. */
+.dsh-better-markdown__user-stack--code {
+  min-width: min(525px, 82%);
+}
+
+.dsh-better-markdown__user-bubble--code {
+  align-self: stretch;
+}
+
+/* The user bubble is more compact than the assistant prose column. */
+.dsh-better-markdown__user-bubble .dsh-better-markdown__markdown {
+  font: 16px/24px var(--dsw-font-family);
+}
+
+.dsh-better-markdown__user-bubble .dsh-better-markdown__markdown .markstream-react {
+  font: inherit;
+}
+
+/* Plain-text code blocks (empty fence or ```text) in the user bubble should
+ * wrap at the bubble edge instead of forcing horizontal scrolling. Markstream
+ * renders these as pre.code-fallback-plain with `white-space: pre` and
+ * `overflow: auto`; the Shiki path is handled below. */
+.dsh-better-markdown__user-bubble .markstream-react .code-fallback-plain {
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important;
+  overflow-x: hidden !important;
+  max-width: 100% !important;
+}
+
+/* Shiki path for code blocks in the user bubble (the real-browser path for
+ * empty / ```text fences): `.code-block-content` carries an inline
+ * `overflow: auto` and `pre.shiki` keeps `white-space: pre`; override both
+ * so code wraps at the bubble edge instead of scrolling. */
+.dsh-better-markdown__user-bubble .markstream-react .code-block-content {
+  overflow-x: hidden !important;
+}
+
+.dsh-better-markdown__user-bubble .markstream-react .code-block-content pre.shiki {
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important;
+  overflow-x: hidden !important;
+  max-width: 100% !important;
+}
+
+.dsh-better-markdown__user-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+}
+
+.dsh-better-markdown__user-time {
+  padding-right: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 14px;
+  line-height: 24px;
+  white-space: nowrap;
+}
+
+.dsh-better-markdown__user-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  border: none;
+  border-radius: 28px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.dsh-better-markdown__user-action:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+@media (hover: hover) {
+  [data-time-hover-root] .dsh-better-markdown__user-time {
+    opacity: 0;
+    transition: opacity 80ms ease;
+  }
+
+  [data-time-hover-root]:hover .dsh-better-markdown__user-time,
+  [data-time-hover-root]:focus-within .dsh-better-markdown__user-time {
+    opacity: 1;
+  }
+}
