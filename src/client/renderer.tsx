@@ -111,16 +111,33 @@ export function localImage(url: string): string | undefined {
  * `![alt](file:///abs/x.png)` destination never survives to DshImageNode as an image
  * node. Rewrite those destinations to bare absolute paths before parsing — localImage()
  * routes them through `/dsh-img` either way. Only image syntax (`![](...)`) is touched;
- * plain links keep their original behavior.
+ * plain links keep their original behavior. The RFC 8089 authority component is preserved
+ * in meaning: an empty or `localhost` authority marks a local root, a drive-letter
+ * authority names a local volume, and a named host (e.g. `file://server/share/x.png`)
+ * becomes the backslash UNC spelling that localImage() and the host route accept.
  */
-const FILE_IMAGE_DEST = /(!\[[^\]]*\]\()file:\/\/\/([^)\s]*)/gi
+const FILE_IMAGE_DEST = /(!\[[^\]]*\]\()file:\/\/([^)\s]*)/gi
 
 function rewriteFileImageDests(text: string): string {
   if (!text.includes('file://')) return text
-  return text.replace(FILE_IMAGE_DEST, (_match, open: string, path: string) => {
-    // 'file:///C:/x' already carries its drive letter; POSIX forms need the leading slash back.
-    const dest = /^[A-Za-z]:[\\/]/.test(path) ? path : `/${path}`
-    return `${open}${dest}`
+  return text.replace(FILE_IMAGE_DEST, (match, open: string, rest: string) => {
+    const slash = rest.indexOf('/')
+    // No path component after the authority — leave the original destination alone.
+    if (slash === -1) return match
+    const authority = rest.slice(0, slash)
+    const pathPart = rest.slice(slash)
+
+    if (authority !== '' && !/^localhost$/i.test(authority)) {
+      // 'file://C:/x' names a local volume; keep the drive letter and its path.
+      if (/^[A-Za-z]:$/.test(authority)) return open + authority + pathPart
+      // A named host is a share: convert to the backslash UNC spelling localImage() expects.
+      return open + '\\\\' + authority + pathPart.split('/').join('\\')
+    }
+
+    let dest = pathPart
+    // 'file:///C:/x' already carries its drive letter; drop the leading slash for it.
+    if (/^\/[A-Za-z]:[\\/]/.test(dest)) dest = dest.slice(1)
+    return open + (dest === '' ? '/' : dest)
   })
 }
 

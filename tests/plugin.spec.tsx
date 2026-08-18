@@ -180,6 +180,27 @@ describe('local image embedding', () => {
     plugin.dispose()
   })
 
+  it('rewrites file URLs with a localhost authority to local paths', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![l](file://localhost/tmp/out/chart.webp)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img).not.toBeNull()
+    // Per RFC 8089 a localhost authority marks the local root, so it routes like an empty one.
+    expect(img?.getAttribute('src')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/tmp/out/chart.webp')}`)
+    plugin.dispose()
+  })
+
+  it('rewrites file URLs with a named authority to UNC share paths', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![n](file://server/share/pic.png)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img).not.toBeNull()
+    // The rewrite emits the backslash UNC spelling; the parser collapse+encode round-trips
+    // through localImage to the single-backslash form, matching the raw UNC pipeline test.
+    expect(img?.getAttribute('src')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('\\server\\share\\pic.png')}`)
+    plugin.dispose()
+  })
+
   it('renders absolute local paths as same-origin images', () => {
     const plugin = mountPlugin()
     const view = render(<MarkstreamMarkdown text={'![shot](/home/thn/dsh/shot.png)'} streaming={false} />)
