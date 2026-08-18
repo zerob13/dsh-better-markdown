@@ -4,7 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { removeCustomComponents } from 'markstream-react'
 import { apply } from '../src/client/index.ts'
-import { MarkstreamMarkdown } from '../src/client/renderer.tsx'
+import { DSH_IMG_ROUTE, MarkstreamMarkdown, localImage } from '../src/client/renderer.tsx'
 
 function mountPlugin() {
   const register = vi.fn(() => () => {})
@@ -127,6 +127,53 @@ describe('browser plugin', () => {
       expect(view.container.querySelector('.markstream-react.dark')).toBeNull()
     })
     view.unmount()
+    plugin.dispose()
+  })
+})
+
+describe('local image embedding', () => {
+  it('resolves local path spellings to the same-origin /dsh-img route', () => {
+    expect(localImage('/home/thn/dsh/shot.png')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/home/thn/dsh/shot.png')}`)
+    expect(localImage('file:///tmp/x/y.jpg')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/tmp/x/y.jpg')}`)
+    expect(localImage('~/pics/a.webp')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('~/pics/a.webp')}`)
+    // Bare root-relative paths need an image extension; web assets stay untouched.
+    expect(localImage('/assets/app.js')).toBeUndefined()
+    expect(localImage('//cdn.example.com/a.png')).toBeUndefined()
+    expect(localImage('https://example.com/a.png')).toBeUndefined()
+    expect(localImage('data:image/png;base64,AAAA')).toBeUndefined()
+  })
+
+  it('renders absolute local paths as same-origin images', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![shot](/home/thn/dsh/shot.png)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img).not.toBeNull()
+    expect(img?.getAttribute('src')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/home/thn/dsh/shot.png')}`)
+    plugin.dispose()
+  })
+
+  it('renders file:// URLs through the same-origin route', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![f](file:///home/thn/dsh/media/b.jpg)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img).not.toBeNull()
+    expect(img?.getAttribute('src')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/home/thn/dsh/media/b.jpg')}`)
+    plugin.dispose()
+  })
+
+  it('keeps remote images on their original URL', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![remote](https://example.com/a.png)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img?.getAttribute('src')).toBe('https://example.com/a.png')
+    plugin.dispose()
+  })
+
+  it('falls back to alt text for non-image local destinations', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![script](/assets/app.js)'} streaming={false} />)
+    expect(view.container.querySelector('img.dsh-better-markdown__image')).toBeNull()
+    expect(screen.getByText('script').closest('.dsh-better-markdown__image-alt')).not.toBeNull()
     plugin.dispose()
   })
 })

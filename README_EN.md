@@ -60,8 +60,33 @@
 | Math | KaTeX inline and display math |
 | Code fences | Uses Markstream `MarkdownCodeBlockNode` + `stream-markdown` + Shiki; unknown languages fall back to visible plain text |
 | Raw HTML | Escaped as text instead of being injected into the DOM |
-| Links and images | Restricted to safe external protocols |
+| Links and images | Safe external protocols only; local image files are embedded through the same-origin `/dsh-img` route (below) |
 | Static plan review / trajectory surfaces | Keep Harness `MarkdownText`; these surfaces expose no shared replacement slot |
+
+## Local image embedding
+
+Image references in assistant Markdown may point straight at **local file paths**, with no separate static file server:
+
+```md
+![screenshot](/home/thn/dsh/shots/result.png)
+![chart](file:///tmp/out/chart.webp)
+![pic](~/pics/a.jpg)
+```
+
+The client rewrites local destinations to the same-origin route `/dsh-img?p=<absolute path>`; the host registers a matching GET handler on the dsh web server that streams the file. The browser resolves the URL against the page origin, so agents never need to know the port or hostname; `http(s)` remote images are unchanged.
+
+**Accepted forms**: absolute POSIX paths, Windows drive/UNC paths, and `~/` home-relative paths — bare paths must end in an image extension (`.png .jpg .jpeg .gif .webp .avif .bmp .svg`) so genuine root-relative web URLs are not swallowed; explicit `file://` destinations are normalized to absolute paths before parsing (the upstream sanitizer drops non-http(s) image schemes).
+
+**Security boundary**: by default only files under registered workspace directories are served (checked after `realpath` normalization), plus an extension allowlist, a file-header signature check, and a 20 MiB size cap. The route is same-origin with the GUI (the web server binds loopback by default); widen it from a profile patch layer if needed:
+
+```yaml
+# == dsh-better-markdown
+- id: better-markdown
+  config:
+    # extraRoots: [/tmp, /home/thn/pics]   # additional allowed directories
+    # allowAny: true                        # any readable file (most permissive; pure-local setups)
+    # maxBytes: 52428800                    # size cap, default 20 MiB
+```
 
 ## How it works
 

@@ -39,9 +39,69 @@ function remoteImage(url: string): string | undefined {
   return safe?.startsWith('http:') || safe?.startsWith('https:') ? safe : undefined
 }
 
-/** Preserve DSH's external-only Markdown image policy. */
+/** Image extensions bare local paths must end with (mirrors the host route default). */
+const LOCAL_IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i
+
+/** Host route endpoint for same-origin local image serving. */
+export const DSH_IMG_ROUTE = '/dsh-img'
+
+/**
+ * Resolve a Markdown image destination that points at a local file into the
+ * same-origin `/dsh-img` URL. Accepted forms: absolute POSIX paths, Windows
+ * drive/UNC paths, and `~/` home-relative paths — bare paths must end with an
+ * image extension so genuine root-relative web URLs are not swallowed; explicit
+ * `file://` URLs carry intent and skip the extension gate.
+ * @param url - The raw Markdown image destination.
+ * @returns The route URL to render, or undefined when the destination is not a local file.
+ */
+export function localImage(url: string): string | undefined {
+  const raw = url.trim()
+  if (raw.length === 0) return undefined
+
+  let path: string | undefined
+  const fileMatch = /^file:\/\/(.+)$/i.exec(raw)
+  if (fileMatch !== null) {
+    const captured = fileMatch[1] ?? ''
+    // Explicit scheme carries intent; no extension gate. 'file:///C:/x' → '/C:/x',
+    // and the leading slash before a drive letter is dropped for the host route.
+    if (!/[?\s#]/.test(captured)) {
+      let p = captured
+      if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1)
+      path = p.length > 0 ? p : undefined
+    }
+  } else if (/^~\//.test(raw)) {
+    path = LOCAL_IMAGE_EXT.test(raw) ? raw : undefined
+  } else if (/^[A-Za-z]:[\\/]/.test(raw)) {
+    path = LOCAL_IMAGE_EXT.test(raw) ? raw : undefined
+  } else if (raw.startsWith('/') && !raw.startsWith('//')) {
+    path = LOCAL_IMAGE_EXT.test(raw) ? raw : undefined
+  }
+
+  if (path === undefined || path.length === 0) return undefined
+  return `${DSH_IMG_ROUTE}?p=${encodeURIComponent(path)}`
+}
+
+/**
+ * The upstream image-src sanitizer drops non-http(s) schemes while tokenizing, so a
+ * `![alt](file:///abs/x.png)` destination never survives to DshImageNode as an image
+ * node. Rewrite those destinations to bare absolute paths before parsing — localImage()
+ * routes them through `/dsh-img` either way. Only image syntax (`![](...)`) is touched;
+ * plain links keep their original behavior.
+ */
+const FILE_IMAGE_DEST = /(!\[[^\]]*\]\()file:\/\/\/([^)\s]*)/gi
+
+function rewriteFileImageDests(text: string): string {
+  if (!text.includes('file://')) return text
+  return text.replace(FILE_IMAGE_DEST, (_match, open: string, path: string) => {
+    // 'file:///C:/x' already carries its drive letter; POSIX forms need the leading slash back.
+    const dest = /^[A-Za-z]:[\\/]/.test(path) ? path : `/${path}`
+    return `${open}${dest}`
+  })
+}
+
+/** Preserve DSH's external-only Markdown image policy; local files go through the same-origin `/dsh-img` route. */
 export function DshImageNode({ node }: NodeComponentProps<ImageNode>) {
-  const src = remoteImage(node.src)
+  const src = remoteImage(node.src) ?? localImage(node.src)
   if (src === undefined) return <span className="dsh-better-markdown__image-alt">{node.alt}</span>
   return <img className="dsh-better-markdown__image" src={src} alt={node.alt} title={node.title ?? undefined} referrerPolicy="no-referrer" />
 }
@@ -152,13 +212,14 @@ export const MarkstreamMarkdown = memo(function MarkstreamMarkdown({ text, strea
   fileMentions?: MarkdownFileMentions | undefined
 }) {
   const isDark = useDshIsDark()
+  const content = useMemo(() => rewriteFileImageDests(text), [text])
   const codeBlockProps = useMemo(() => ({
     fileMentions: streaming ? undefined : fileMentions,
   }), [fileMentions, streaming])
   return (
     <div className="dsh-better-markdown__markdown" data-markdown-renderer="markstream-react">
       <MarkdownRender
-        content={text}
+        content={content}
         final={!streaming}
         isDark={isDark}
         customId={CUSTOM_COMPONENT_SCOPE}
