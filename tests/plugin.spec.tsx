@@ -4,7 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { removeCustomComponents } from 'markstream-react'
 import { apply } from '../src/client/index.ts'
-import { MarkstreamMarkdown } from '../src/client/renderer.tsx'
+import { DSH_IMG_ROUTE, MarkstreamMarkdown, localImage } from '../src/client/renderer.tsx'
 
 function mountPlugin() {
   const register = vi.fn(() => () => {})
@@ -127,6 +127,111 @@ describe('browser plugin', () => {
       expect(view.container.querySelector('.markstream-react.dark')).toBeNull()
     })
     view.unmount()
+    plugin.dispose()
+  })
+})
+
+describe('local image embedding', () => {
+  it('resolves local path spellings to the same-origin /dsh-img route', () => {
+    expect(localImage('/home/thn/dsh/shot.png')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/home/thn/dsh/shot.png')}`)
+    expect(localImage('file:///tmp/x/y.jpg')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/tmp/x/y.jpg')}`)
+    expect(localImage('~/pics/a.webp')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('~/pics/a.webp')}`)
+    // Bare root-relative paths need an image extension; web assets stay untouched.
+    expect(localImage('/assets/app.js')).toBeUndefined()
+    expect(localImage('//cdn.example.com/a.png')).toBeUndefined()
+    expect(localImage('https://example.com/a.png')).toBeUndefined()
+    expect(localImage('data:image/png;base64,AAAA')).toBeUndefined()
+  })
+
+  it('decodes percent escapes exactly once and accepts backslash UNC paths', () => {
+    // Encoded names resolve to real filesystem paths (file URLs and rewritten bare forms).
+    expect(localImage('file:///tmp/shots/my%20shot.png')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/tmp/shots/my shot.png')}`)
+    expect(localImage('/home/u/a%20b.png')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/home/u/a b.png')}`)
+    // Parser-encoded backslashes in UNC paths decode to the pipeline spelling,
+    // where Markdown escape processing collapsed the leading pair to one backslash.
+    const uncCollapsed = '\\server\\share\\pic.png'
+    expect(localImage('%5Cserver%5Cshare%5Cpic.png')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent(uncCollapsed)}`)
+    // Raw double-backslash UNC share paths are accepted directly as well.
+    const uncRaw = '\\\\server\\share\\pic.png'
+    expect(localImage(uncRaw)).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent(uncRaw)}`)
+    // Non-image UNC shares still fall through to alt text.
+    expect(localImage('\\\\server\\share\\notes.txt')).toBeUndefined()
+    // A malformed escape rejects the destination safely instead of shipping a broken route.
+    expect(localImage('/home/u/100%.png')).toBeUndefined()
+  })
+
+  it('renders file URLs whose paths contain percent-encoded spaces', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![s](file:///tmp/shots/my%20shot.png)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img).not.toBeNull()
+    expect(img?.getAttribute('src')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/tmp/shots/my shot.png')}`)
+    plugin.dispose()
+  })
+
+  it('renders backslash UNC share paths as same-origin images', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![u](\\\\server\\share\\pic.png)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img).not.toBeNull()
+    // The parser escape-collapses the leading pair and percent-encodes backslashes;
+    // localImage decodes that to the single-backslash spelling before routing.
+    expect(img?.getAttribute('src')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('\\server\\share\\pic.png')}`)
+    plugin.dispose()
+  })
+
+  it('rewrites file URLs with a localhost authority to local paths', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![l](file://localhost/tmp/out/chart.webp)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img).not.toBeNull()
+    // Per RFC 8089 a localhost authority marks the local root, so it routes like an empty one.
+    expect(img?.getAttribute('src')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/tmp/out/chart.webp')}`)
+    plugin.dispose()
+  })
+
+  it('rewrites file URLs with a named authority to UNC share paths', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![n](file://server/share/pic.png)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img).not.toBeNull()
+    // The rewrite emits the backslash UNC spelling; the parser collapse+encode round-trips
+    // through localImage to the single-backslash form, matching the raw UNC pipeline test.
+    expect(img?.getAttribute('src')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('\\server\\share\\pic.png')}`)
+    plugin.dispose()
+  })
+
+  it('renders absolute local paths as same-origin images', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![shot](/home/thn/dsh/shot.png)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img).not.toBeNull()
+    expect(img?.getAttribute('src')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/home/thn/dsh/shot.png')}`)
+    plugin.dispose()
+  })
+
+  it('renders file:// URLs through the same-origin route', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![f](file:///home/thn/dsh/media/b.jpg)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img).not.toBeNull()
+    expect(img?.getAttribute('src')).toBe(`${DSH_IMG_ROUTE}?p=${encodeURIComponent('/home/thn/dsh/media/b.jpg')}`)
+    plugin.dispose()
+  })
+
+  it('keeps remote images on their original URL', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![remote](https://example.com/a.png)'} streaming={false} />)
+    const img = view.container.querySelector('img.dsh-better-markdown__image')
+    expect(img?.getAttribute('src')).toBe('https://example.com/a.png')
+    plugin.dispose()
+  })
+
+  it('falls back to alt text for non-image local destinations', () => {
+    const plugin = mountPlugin()
+    const view = render(<MarkstreamMarkdown text={'![script](/assets/app.js)'} streaming={false} />)
+    expect(view.container.querySelector('img.dsh-better-markdown__image')).toBeNull()
+    expect(screen.getByText('script').closest('.dsh-better-markdown__image-alt')).not.toBeNull()
     plugin.dispose()
   })
 })

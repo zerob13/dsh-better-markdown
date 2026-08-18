@@ -15,16 +15,19 @@ import { SHIKI_LANGUAGES } from './shiki.ts'
 
 const CUSTOM_COMPONENT_SCOPE = 'dsh-better-markdown'
 
+/** Type guard for the file-mentions resolver passed through code-block props. */
 function isFileMentions(value: unknown): value is MarkdownFileMentions {
   return typeof value === 'object' && value !== null && 'resolve' in value
     && typeof value.resolve === 'function'
 }
 
+/** Read the file-mentions resolver out of one node's render context, if present. */
 function rendererFileMentions(ctx: NodeComponentProps['ctx']): MarkdownFileMentions | undefined {
   const value = ctx?.codeBlockProps?.fileMentions
   return isFileMentions(value) ? value : undefined
 }
 
+/** Keep only http(s)/mailto destinations; anything else (relative, data:, …) stays inert. */
 function safeLink(url: string): string | undefined {
   try {
     const protocol = new URL(url).protocol
@@ -34,14 +37,113 @@ function safeLink(url: string): string | undefined {
   }
 }
 
+/** Return the destination when it is a plain http(s) URL, else undefined (local files). */
 function remoteImage(url: string): string | undefined {
   const safe = safeLink(url)
   return safe?.startsWith('http:') || safe?.startsWith('https:') ? safe : undefined
 }
 
-/** Preserve DSH's external-only Markdown image policy. */
+/** Image extensions bare local paths must end with (mirrors the host route default). */
+const LOCAL_IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i
+
+/** Host route endpoint for same-origin local image serving. */
+export const DSH_IMG_ROUTE = '/dsh-img'
+
+/**
+ * Resolve a Markdown image destination that points at a local file into the
+ * same-origin `/dsh-img` URL. Accepted forms: absolute POSIX paths, Windows
+ * drive/UNC paths (both slash and backslash spellings), and `~/` home-relative
+ * paths — bare paths must end with an image extension so genuine root-relative
+ * web URLs are not swallowed; explicit `file://` URLs carry intent and skip the
+ * extension gate. Percent escapes (`%20`, `%5C`, …) are decoded exactly once
+ * before matching, so encoded file names resolve to real filesystem paths; a
+ * malformed escape rejects the destination safely (alt-text fallback).
+ * @param url - The raw Markdown image destination.
+ * @returns The route URL to render, or undefined when the destination is not a local file.
+ */
+export function localImage(url: string): string | undefined {
+  const raw = url.trim()
+  if (raw.length === 0) return undefined
+
+  // Decode percent escapes exactly once before branch matching: covers `file://`
+  // destinations with encoded names (%20), parser-encoded backslashes in UNC paths
+  // (%5C), and bare paths rewritten from file URLs. A malformed escape is not a
+  // plausible local path, so reject it instead of shipping a broken route URL.
+  let value: string
+  try {
+    value = decodeURIComponent(raw)
+  } catch {
+    return undefined
+  }
+
+  let path: string | undefined
+  const fileMatch = /^file:\/\/(.+)$/i.exec(value)
+  if (fileMatch !== null) {
+    const captured = fileMatch[1] ?? ''
+    // Explicit scheme carries intent; no extension gate. 'file:///C:/x' → '/C:/x',
+    // and the leading slash before a drive letter is dropped for the host route.
+    // Only query/fragment markers disqualify: spaces may be decoded %20 now.
+    if (!/[?#]/.test(captured)) {
+      let p = captured
+      if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1)
+      path = p.length > 0 ? p : undefined
+    }
+  } else if (/^~\//.test(value)) {
+    path = LOCAL_IMAGE_EXT.test(value) ? value : undefined
+  } else if (/^[A-Za-z]:[\\/]/.test(value)) {
+    path = LOCAL_IMAGE_EXT.test(value) ? value : undefined
+  } else if (value.startsWith('/') && !value.startsWith('//')) {
+    path = LOCAL_IMAGE_EXT.test(value) ? value : undefined
+  } else if (/^\\{1,2}/.test(value) && value.indexOf('\\', 2) !== -1) {
+    // Backslash UNC share paths (e.g. \\server\share\pic.png). Markdown escape
+    // processing may collapse the leading pair to a single backslash on the way
+    // through the parser, so both spellings are accepted; at least one further
+    // segment separator keeps single odd filenames from matching.
+    path = LOCAL_IMAGE_EXT.test(value) ? value : undefined
+  }
+
+  if (path === undefined || path.length === 0) return undefined
+  return `${DSH_IMG_ROUTE}?p=${encodeURIComponent(path)}`
+}
+
+/**
+ * The upstream image-src sanitizer drops non-http(s) schemes while tokenizing, so a
+ * `![alt](file:///abs/x.png)` destination never survives to DshImageNode as an image
+ * node. Rewrite those destinations to bare absolute paths before parsing — localImage()
+ * routes them through `/dsh-img` either way. Only image syntax (`![](...)`) is touched;
+ * plain links keep their original behavior. The RFC 8089 authority component is preserved
+ * in meaning: an empty or `localhost` authority marks a local root, a drive-letter
+ * authority names a local volume, and a named host (e.g. `file://server/share/x.png`)
+ * becomes the backslash UNC spelling that localImage() and the host route accept.
+ */
+const FILE_IMAGE_DEST = /(!\[[^\]]*\]\()file:\/\/([^)\s]*)/gi
+
+function rewriteFileImageDests(text: string): string {
+  if (!text.includes('file://')) return text
+  return text.replace(FILE_IMAGE_DEST, (match, open: string, rest: string) => {
+    const slash = rest.indexOf('/')
+    // No path component after the authority — leave the original destination alone.
+    if (slash === -1) return match
+    const authority = rest.slice(0, slash)
+    const pathPart = rest.slice(slash)
+
+    if (authority !== '' && !/^localhost$/i.test(authority)) {
+      // 'file://C:/x' names a local volume; keep the drive letter and its path.
+      if (/^[A-Za-z]:$/.test(authority)) return open + authority + pathPart
+      // A named host is a share: convert to the backslash UNC spelling localImage() expects.
+      return open + '\\\\' + authority + pathPart.split('/').join('\\')
+    }
+
+    let dest = pathPart
+    // 'file:///C:/x' already carries its drive letter; drop the leading slash for it.
+    if (/^\/[A-Za-z]:[\\/]/.test(dest)) dest = dest.slice(1)
+    return open + (dest === '' ? '/' : dest)
+  })
+}
+
+/** Preserve DSH's external-only Markdown image policy; local files go through the same-origin `/dsh-img` route. */
 export function DshImageNode({ node }: NodeComponentProps<ImageNode>) {
-  const src = remoteImage(node.src)
+  const src = remoteImage(node.src) ?? localImage(node.src)
   if (src === undefined) return <span className="dsh-better-markdown__image-alt">{node.alt}</span>
   return <img className="dsh-better-markdown__image" src={src} alt={node.alt} title={node.title ?? undefined} referrerPolicy="no-referrer" />
 }
@@ -152,13 +254,14 @@ export const MarkstreamMarkdown = memo(function MarkstreamMarkdown({ text, strea
   fileMentions?: MarkdownFileMentions | undefined
 }) {
   const isDark = useDshIsDark()
+  const content = useMemo(() => rewriteFileImageDests(text), [text])
   const codeBlockProps = useMemo(() => ({
     fileMentions: streaming ? undefined : fileMentions,
   }), [fileMentions, streaming])
   return (
     <div className="dsh-better-markdown__markdown" data-markdown-renderer="markstream-react">
       <MarkdownRender
-        content={text}
+        content={content}
         final={!streaming}
         isDark={isDark}
         customId={CUSTOM_COMPONENT_SCOPE}
@@ -173,17 +276,20 @@ export const MarkstreamMarkdown = memo(function MarkstreamMarkdown({ text, strea
   )
 })
 
+/** First line of a reasoning block — the collapsed summary when settled. */
 function firstLine(text: string): string {
   const newline = text.indexOf('\n')
   return newline === -1 ? text : text.slice(0, newline)
 }
 
+/** Last non-empty line of a reasoning block — the live preview while streaming. */
 function latestLine(text: string): string {
   const visible = text.trimEnd()
   const newline = visible.lastIndexOf('\n')
   return newline === -1 ? visible : visible.slice(newline + 1)
 }
 
+/** Collapsible "Think" row showing a live or settled reasoning summary. */
 function ReasoningRow({ text, running, t }: {
   text: string
   running: boolean
@@ -223,8 +329,10 @@ function ReasoningRow({ text, running, t }: {
   )
 }
 
+/** One assistant message block (text, reasoning, image, tool-call, or other). */
 type AssistantBlock = AssistantChatData['blocks'][number]
 
+/** Render the full assistant turn: Markdown text, thinking rows, and image galleries. */
 function BetterAssistantMarkdown({ blocks, streaming, interrupted, loadImage, mentions, t }: {
   blocks: readonly AssistantBlock[]
   streaming: boolean

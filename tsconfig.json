@@ -13,7 +13,7 @@
     "skipLibCheck": true,
     "declaration": true,
     "outDir": "lib/types",
-    "types": ["vitest/globals"]
+    "types": ["vitest/globals", "node"]
   },
   "include": ["src", "tests"]
 }
