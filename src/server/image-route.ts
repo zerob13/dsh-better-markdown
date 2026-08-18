@@ -6,6 +6,7 @@
  */
 
 import { createReadStream, promises as fsp, realpathSync, statSync } from 'node:fs'
+import type { FileHandle } from 'node:fs/promises'
 import type { Stats } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir, platform } from 'node:os'
@@ -87,8 +88,9 @@ export function expandHome(raw: string): string {
 export function looksLikeLocalPath(raw: string): boolean {
   if (raw.length === 0) return false
   if (platform() === 'win32') {
-    // Drive-letter paths in either slash spelling, or UNC shares.
-    return /^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith('\\\\')
+    // Drive-letter paths in either slash spelling, or UNC shares. Markdown escape
+    // processing may collapse a leading backslash pair to one, so accept both.
+    return /^[A-Za-z]:[\\/]/.test(raw) || /^\\{1,2}/.test(raw)
   }
   return raw.startsWith('/')
 }
@@ -127,6 +129,8 @@ export function resolveImage(raw: string): ResolvedImage | undefined {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
     if (code === 'ENOENT' || code === 'ENOTDIR') return undefined
+    // An untraversable parent directory is effectively a missing file for this client.
+    if (code === 'EACCES' || code === 'EPERM') return undefined
     throw error
   }
   return { real, ext: extname(real).toLowerCase() }
@@ -198,7 +202,10 @@ export async function serveImage(
   try {
     stat = statSync(resolved.real)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return fail(404, 'file not found')
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return fail(404, 'file not found')
+    // Permission loss between resolve and stat is a controlled rejection, not a crash.
+    if (code === 'EACCES' || code === 'EPERM') return fail(403, 'file is inaccessible')
     throw error
   }
   if (!stat.isFile()) return fail(404, 'not a regular file')
@@ -215,12 +222,22 @@ export async function serveImage(
   }
 
   if (!config.allowAny && !underAnyRoot(resolved.real, roots)) return fail(403, 'outside allowed directories')
-  // allowAny serves any readable file; the extension gate only applies in root mode.
-  if (!config.allowAny && config.extensions.length > 0 && !config.extensions.includes(resolved.ext)) {
+  // allowAny serves any readable file; otherwise the extension gate applies and an
+  // empty list denies every extension (serving nothing).
+  if (!config.allowAny && !config.extensions.includes(resolved.ext)) {
     return fail(415, `extension '${resolved.ext || '(none)'}' not served`)
   }
 
-  const handle = await fsp.open(resolved.real, 'r')
+  let handle: FileHandle
+  try {
+    handle = await fsp.open(resolved.real, 'r')
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return fail(404, 'file not found')
+    // Mode bits can drop between stat and open; keep the failure controlled.
+    if (code === 'EACCES' || code === 'EPERM') return fail(403, 'file is inaccessible')
+    throw error
+  }
   try {
     const head = Buffer.alloc(Math.min(16, stat.size))
     await handle.read(head, 0, head.length, 0).catch(() => undefined)

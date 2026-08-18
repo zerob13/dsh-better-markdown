@@ -1,9 +1,17 @@
 import { Writable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { promises as fsp, mkdtempSync, writeFileSync } from 'node:fs'
+import * as fs from 'node:fs'
+import { promises as fsp, chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+
+// Delegate to the real filesystem but expose statSync as a spy so permission
+// failures can be triggered deterministically (ESM exports are not spiable).
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, statSync: vi.fn(actual.statSync) }
+})
 
 import { Config } from '../src/index.ts'
 import {
@@ -119,6 +127,8 @@ describe('looksLikeLocalPath', () => {
     if (process.platform !== 'win32') return
     expect(looksLikeLocalPath('C:\\a\\b.png')).toBe(true)
     expect(looksLikeLocalPath('//server/share/b.png')).toBe(true)
+    // Markdown escape processing may collapse a leading backslash pair to one.
+    expect(looksLikeLocalPath('\\server\\share\\b.png')).toBe(true)
   })
 })
 
@@ -217,6 +227,42 @@ describe('serveImage', () => {
   it('rejects non-GET methods with 405', async () => {
     const res = await request('POST', `/dsh-img?p=${encodeURIComponent(pngPath)}`, DEFAULT_CONFIG, [root])
     expect(res.statusCode).toBe(405)
+  })
+
+  it('treats an empty extensions list as denying every file with 415', async () => {
+    const res = await request('GET', `/dsh-img?p=${encodeURIComponent(pngPath)}`, { ...DEFAULT_CONFIG, extensions: [] }, [root])
+    expect(res.statusCode).toBe(415)
+  })
+
+  it('still serves any readable file when allowAny overrides an empty extension list', async () => {
+    const res = await request('GET', `/dsh-img?p=${encodeURIComponent(txtPath)}`, { ...DEFAULT_CONFIG, allowAny: true, extensions: [] }, [root])
+    expect(res.statusCode).toBe(200)
+    expect(Buffer.concat(res.chunks).toString()).toBe('hello world\n')
+  })
+
+  it('maps a stat EACCES to a controlled 403 instead of escaping as a 500', async () => {
+    const error = Object.assign(new Error('EACCES: permission denied, stat'), { code: 'EACCES' })
+    vi.mocked(fs.statSync).mockImplementationOnce(() => { throw error })
+    try {
+      const res = await request('GET', `/dsh-img?p=${encodeURIComponent(pngPath)}`, DEFAULT_CONFIG, [root])
+      expect(res.statusCode).toBe(403)
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('maps an unreadable file to a controlled 403 instead of escaping as a 500', async () => {
+    // Mode bits only bind non-root processes; root reads anything, so skip under root.
+    if (process.platform !== 'win32' && process.getuid?.() === 0) return
+    const locked = join(root, 'locked.png')
+    writeFileSync(locked, PNG_BYTES)
+    chmodSync(locked, 0o000)
+    try {
+      const res = await request('GET', `/dsh-img?p=${encodeURIComponent(locked)}`, DEFAULT_CONFIG, [root])
+      expect(res.statusCode).toBe(403)
+    } finally {
+      chmodSync(locked, 0o644)
+    }
   })
 })
 

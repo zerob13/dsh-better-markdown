@@ -75,7 +75,7 @@ Assistant Markdown 中的图片引用可以直接写**本机文件路径**，无
 
 客户端把本地路径改写成同源路由 `/dsh-img?p=<绝对路径>`，宿主侧在 dsh web 服务器上注册了同名 GET 路由直接流式返回文件。浏览器按页面 origin 解析该 URL，因此 agent 不需要知道端口或域名；`http(s)` 远程图片行为不变。
 
-**接受的路径形式**：POSIX 绝对路径、Windows 盘符/UNC 路径、`~/` 家目录相对路径，以及显式 `file://` URL（解析前会被规范化为绝对路径——上游 sanitizer 会丢弃非 http(s) scheme 的图片目的地；裸路径必须带图片扩展名 `.png .jpg .jpeg .gif .webp .avif .bmp .svg`，避免误吞真正的根相对 web 地址）。
+**接受的路径形式**：POSIX 绝对路径、Windows 盘符/UNC 路径（斜杠与反斜杠两种写法）、`~/` 家目录相对路径，以及显式 `file://` URL（解析前会被规范化为绝对路径——上游 sanitizer 会丢弃非 http(s) scheme 的图片目的地；裸路径必须带图片扩展名 `.png .jpg .jpeg .gif .webp .avif .bmp .svg`，避免误吞真正的根相对 web 地址）。路径中的百分号转义（如空格 `%20`）在路由前只解码一次，因此带编码的文件名能解析到真实文件；非法转义则回退为 alt 文本。
 
 **安全边界**：默认只允许已注册 workspace 目录下的文件（经 `realpath` 规范化后判断），另有扩展名白名单 + 文件头签名校验、20 MiB 体积上限。路由与 GUI 同源（web 服务器默认绑定回环地址）；如需放宽，可在 profile 补丁层覆盖配置：
 
@@ -86,6 +86,7 @@ Assistant Markdown 中的图片引用可以直接写**本机文件路径**，无
     # extraRoots: [/tmp, /home/thn/pics]   # 额外允许的目录
     # allowAny: true                        # 任意可读文件（最宽松，适合纯本地环境）
     # maxBytes: 52428800                    # 体积上限，默认 20 MiB
+    # extensions: [.png, .jpg]              # 提供的扩展名列表（空列表 = 不提供任何文件）
 ```
 
 ## 工作原理
